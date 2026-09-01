@@ -213,6 +213,30 @@
       margin-right: 6px;
     }
 
+    .rental-badge {
+      display: inline-block;
+      background: #e2edf7;
+      padding: 0.1rem 0.8rem;
+      border-radius: 30px;
+      font-size: 0.75rem;
+      font-weight: 500;
+      color: #1a3c5e;
+      margin-left: 0.5rem;
+      border: 1px solid #b8cee5;
+    }
+
+    .rental-badge.rental {
+      background: #fce8e8;
+      color: #a03131;
+      border-color: #e6bdbd;
+    }
+
+    .rental-badge.not-rental {
+      background: #e5f0e5;
+      color: #1e6b3b;
+      border-color: #b6d7b6;
+    }
+
     /* small screen */
     @media (max-width: 480px) {
       .card { padding: 1.5rem; }
@@ -257,15 +281,12 @@
       function translateImportStatus(raw) {
         if (!raw) return { display: '—', isImported: false };
         const lower = raw.toLowerCase().trim();
-        // "Notað"  -> "Yes" (used / imported)
         if (lower.includes('notað')) {
           return { display: 'Yes', isImported: true };
         }
-        // "Nýtt" or similar -> "No" (new, not imported used)
         if (lower.includes('nýtt')) {
           return { display: 'No', isImported: false };
         }
-        // fallback: assume not imported if unknown
         return { display: raw, isImported: false };
       }
 
@@ -273,6 +294,22 @@
       function formatColor(raw) {
         if (!raw || raw === '—') return '—';
         return raw;
+      }
+
+      // ----- rental detection from usegroup -----
+      function getRentalInfo(usegroup) {
+        if (!usegroup) return { isRental: false, display: '—' };
+        const lower = usegroup.toLowerCase().trim();
+        // "Ökutækjaleiga" -> rental
+        if (lower.includes('ökutækjaleiga') || lower.includes('leiga')) {
+          return { isRental: true, display: 'Rental' };
+        }
+        // "Almenn notkun" -> not rental
+        if (lower.includes('almenn notkun') || lower.includes('almenn')) {
+          return { isRental: false, display: 'Private' };
+        }
+        // fallback: show raw but treat as not rental
+        return { isRental: false, display: usegroup };
       }
 
       // render vehicle data from API response
@@ -288,7 +325,6 @@
         const speccom = d.speccom || '—';
         const preregdate = d.preregdate || '—';
         const firstregdate = d.firstregdate || '—';
-        // translate import field
         const rawImport = d.import || '—';
         const importInfo = translateImportStatus(rawImport);
         const importDisplay = importInfo.display;
@@ -301,31 +337,49 @@
         const regtype = d.regtype || '—';
         const formercountry = d.formercountry || '—';
         const importername = d.importername || '—';
+        const usegroup = d.usegroup || '—';
+
+        // rental info
+        const rental = getRentalInfo(usegroup);
+        const isRental = rental.isRental;
+        const rentalDisplay = rental.display;
 
         // build clean display
         let html = '';
 
-        // primary: make + vehcom + speccom
+        // primary: make + vehcom + speccom + rental badge
+        const rentalBadgeClass = isRental ? 'rental' : 'not-rental';
+        const rentalBadgeText = isRental ? '🚗 Rental' : 'Private';
         html += `<div class="vehicle-title">
           <span>${make} ${vehcom} ${speccom}</span>
-          <small>${importDisplay}</small>
+          <small>${importDisplay} <span class="rental-badge ${rentalBadgeClass}">${rentalBadgeText}</span></small>
         </div>`;
 
         const fields = [];
 
-        // Always show "First registration" using preregdate (Iceland registration)
-        if (preregdate && preregdate !== '—') {
-          fields.push({ label: 'First registration in Iceland', value: preregdate });
-        } else if (firstregdate && firstregdate !== '—') {
-          fields.push({ label: 'First registration', value: firstregdate });
-        }
-
-        // If imported, show the original first registration date as well
+        // ---- Registration dates: switch for imported cars ----
+        // For imported: show "First registration (original)" first, then "First registration in Iceland"
         if (isImported) {
-          if (firstregdate && firstregdate !== '—' && firstregdate !== preregdate) {
-            fields.push({ label: 'First registration', value: firstregdate });
+          // original first registration
+          if (firstregdate && firstregdate !== '—') {
+            fields.push({ label: 'First registration (original)', value: firstregdate });
+          }
+          // Iceland registration (preregdate)
+          if (preregdate && preregdate !== '—') {
+            fields.push({ label: 'First registration in Iceland', value: preregdate });
+          }
+          // if both are missing, fallback
+          if ((!firstregdate || firstregdate === '—') && (!preregdate || preregdate === '—')) {
+            fields.push({ label: 'First registration', value: '—' });
+          }
+        } else {
+          // non-imported: show preregdate (or firstregdate as fallback)
+          if (preregdate && preregdate !== '—') {
+            fields.push({ label: 'First registration', value: preregdate });
           } else if (firstregdate && firstregdate !== '—') {
             fields.push({ label: 'First registration', value: firstregdate });
+          } else {
+            fields.push({ label: 'First registration', value: '—' });
           }
         }
 
@@ -361,6 +415,9 @@
         if (vin && vin !== '—') {
           fields.push({ label: 'VIN', value: vin });
         }
+
+        // ---- Rental status as separate field (already in title, but also show explicitly) ----
+        fields.push({ label: 'Use group', value: usegroup !== '—' ? usegroup : '—' });
 
         for (const f of fields) {
           html += `<div class="result-item">
@@ -437,7 +494,6 @@
           'mint': '#98ff98',
           'forest': '#228b22',
         };
-        // Try to match the color name (partial match is fine)
         for (const [key, hex] of Object.entries(colorMap)) {
           if (colorName.includes(key)) {
             return hex;
@@ -464,7 +520,6 @@
           updateUrlWithPlate(normalized);
         }
 
-        // show loading state
         resultContainer.innerHTML = `<div style="color:#2f4b6e;">⏳ sæki gögn fyrir <strong>${normalized}</strong> ...</div>`;
 
         const url = `https://www.autoparts.is/api/car-data/${normalized}`;
@@ -488,13 +543,11 @@
 
           const json = await response.json();
 
-          // check if we have data
           if (!json || !json.data) {
             showError('Engin gögn fyrir þetta númer.');
             return;
           }
 
-          // success — render
           renderData(json);
 
         } catch (err) {
